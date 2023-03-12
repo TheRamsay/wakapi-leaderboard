@@ -1,17 +1,13 @@
 use std::fmt::format;
 use serde::{Deserialize, Serialize};
-use std::env;
-
 use serenity::async_trait;
 use serenity::prelude::*;
 use serenity::model::channel::Message;
 use serenity::framework::standard::macros::{command, group};
 use serenity::framework::standard::{StandardFramework, CommandResult};
 use regex::Regex;
-
-
-// Names 
-// <strong class="text-ellipsis truncate">@(\w+)<\/strong>
+use redis::Commands;
+use redis::Conection;
 
 #[derive(Debug, Serialize, Deserialize)]
 struct UserInfo {
@@ -42,13 +38,25 @@ async fn scrape_leaderboard() -> Vec<UserInfo> {
 }
 
 async fn get_user_stats(username: &str) -> Option<UserInfo> {
-    let api_url = format!("https://wakapi.krejzac.cz/api/compat/wakatime/v1/users/{}/stats/month", username);
-    let response = reqwest::get(api_url).await.unwrap();
+    let client = redis::Client::open("redis-cli -u redis://default:qJI0nbg5dpzEt5jrr2R1@containers-us-west-179.railway.app:7784").unwrap();
+    let mut con: Redis::Conection = client.get_connection().expect("Coooo");
+    con.get(username).expect("Coooooooo");
+    None
 
-    return match response.json::<UserPayload>().await {
-        Ok(val) =>  Some(val.data),
-        Err(_) => None
-    }
+    // if let Some(value) = con.get(username) {
+    //     Some(UserInfo { username: username.to_string(), total_seconds: value })
+    // } else {
+    //     let api_url = format!("https://wakapi.krejzac.cz/api/compat/wakatime/v1/users/{}/stats/month", username);
+    //     let response = reqwest::get(api_url).await.unwrap();
+
+    //     return match response.json::<UserPayload>().await {
+    //         Ok(val) =>  {
+    //             con.setex(val.data.username, val.data.total_seconds, 60 * 3).unwrap();
+    //             Some(val.data)
+    //         },
+    //         Err(_) => None
+    //     }
+    // }
 }
 
 fn print_leaderboard(leaderboard: &Vec<UserInfo>) {
@@ -90,14 +98,12 @@ async fn main() {
 }
 
 #[command]
-async fn vino(ctx: &Context, msg: &Message) -> CommandResult {
-   
+async fn vino(ctx: &Context, msg: &Message) -> CommandResult { 
     let leaderboard = scrape_leaderboard().await;
 
     println!("{:?}", leaderboard);
     
     let mut message = String::new();
-
 
     for (i, user_info) in leaderboard.iter().enumerate() {
         message.push_str(format!("{}) {} - {} hours\n", i + 1, user_info.username, user_info.total_seconds / (60 * 60) ).as_str());
