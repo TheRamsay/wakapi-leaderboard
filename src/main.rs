@@ -1,12 +1,14 @@
 use std::fmt::format;
 use serde::{Deserialize, Serialize};
+use std::env;
 
+use serenity::async_trait;
+use serenity::prelude::*;
+use serenity::model::channel::Message;
+use serenity::framework::standard::macros::{command, group};
+use serenity::framework::standard::{StandardFramework, CommandResult};
 use regex::Regex;
 
-fn main() {
-    let leaderboard = scrape_leaderboard();
-    print_leaderboard(&leaderboard);
-}
 
 // Names 
 // <strong class="text-ellipsis truncate">@(\w+)<\/strong>
@@ -22,15 +24,15 @@ struct UserPayload {
     data: UserInfo
 }
 
-fn scrape_leaderboard() -> Vec<UserInfo> {
+async fn scrape_leaderboard() -> Vec<UserInfo> {
     let mut leaderboard: Vec<UserInfo> = Vec::new();
 
-    let response = reqwest::blocking::get("https://wakapi.krejzac.cz/leaderboard").unwrap().text().unwrap();
+    let response = reqwest::get("https://wakapi.krejzac.cz/leaderboard").await.unwrap().text().await.unwrap();
     let re = Regex::new(r#"<strong class="text-ellipsis truncate">@(\w+)</strong>"#).unwrap();
 
     for cap in re.captures_iter(&response) {
         println!("Fetching info for {:?}...", &cap[1]);
-        if let Some(user_info) = get_user_stats(&cap[1]) {
+        if let Some(user_info) = get_user_stats(&cap[1]).await {
             leaderboard.push(user_info);
         }
     }
@@ -39,11 +41,11 @@ fn scrape_leaderboard() -> Vec<UserInfo> {
     leaderboard
 }
 
-fn get_user_stats(username: &str) -> Option<UserInfo> {
+async fn get_user_stats(username: &str) -> Option<UserInfo> {
     let api_url = format!("https://wakapi.krejzac.cz/api/compat/wakatime/v1/users/{}/stats/month", username);
-    let response = reqwest::blocking::get(api_url).unwrap();
+    let response = reqwest::get(api_url).await.unwrap();
 
-    return match response.json::<UserPayload>() {
+    return match response.json::<UserPayload>().await {
         Ok(val) =>  Some(val.data),
         Err(_) => None
     }
@@ -51,6 +53,66 @@ fn get_user_stats(username: &str) -> Option<UserInfo> {
 
 fn print_leaderboard(leaderboard: &Vec<UserInfo>) {
     for (i, user_info) in leaderboard.iter().enumerate() {
-        println!("{}) {} - {:.2} hours", i + 1, user_info.username, user_info.total_seconds  as f64 / (60 * 60) as f64);
+        // format!("{}) {} - {:.2} hours", i + 1, user_info.username, user_info.total_seconds  as f64 / (60 * 60) as f64);
+        // format!("{}) {} - {:.2} hours", String::from("1"), String::from("ahoj"), String::from("dobry den"));
+        println!();
     }
+}
+
+#[group]
+#[commands(vino)]
+struct General;
+
+struct Handler;
+
+#[async_trait]
+impl EventHandler for Handler {}
+
+#[tokio::main]
+async fn main() {
+    let framework = StandardFramework::new()
+        .configure(|c| c.prefix("vim ")) // set the bot's prefix to "~"
+        .group(&GENERAL_GROUP);
+
+    // Login with a bot token from the environment
+    let token = "***REMOVED***";
+    let intents = GatewayIntents::non_privileged() | GatewayIntents::MESSAGE_CONTENT;
+    let mut client = Client::builder(token, intents)
+        .event_handler(Handler)
+        .framework(framework)
+        .await
+        .expect("Error creating client");
+
+    // start listening for events by starting a single shard
+    if let Err(why) = client.start().await {
+        println!("An error occurred while running the client: {:?}", why);
+    }
+}
+
+#[command]
+async fn vino(ctx: &Context, msg: &Message) -> CommandResult {
+   
+    let leaderboard = scrape_leaderboard().await;
+
+    println!("{:?}", leaderboard);
+    
+    let mut message = String::new();
+
+
+    for (i, user_info) in leaderboard.iter().enumerate() {
+        message.push_str(format!("{}) {} - {} hours\n", i + 1, user_info.username, user_info.total_seconds / (60 * 60) ).as_str());
+    }
+
+    msg.channel_id.send_message(&ctx.http, |m| {
+            m.embed(|e| e
+                .colour(0x00ff00)
+                .field("Leaderboard", message, false)
+                .footer(|f| {
+                    f.text("🕒 Stats last updated @");
+                    f
+                })
+            )
+        }).await?;
+
+    Ok(())
 }

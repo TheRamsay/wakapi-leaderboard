@@ -6,8 +6,11 @@ edition = "2021"
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]
+env = "0.0.0"
 regex = "1.7.1"
 reqwest = { version = "0.11.14", features = ["blocking", "json"] }
 scraper = "0.15.0"
 serde = { version = "1.0.155", features = ["derive"] }
 serde_json = "1.0.94"
+serenity = "0.11"
+tokio = { version = "1.21.2", features = ["macros", "rt-multi-thread"] }
