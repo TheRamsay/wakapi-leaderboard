@@ -7,7 +7,6 @@ use serenity::framework::standard::macros::{command, group};
 use serenity::framework::standard::{StandardFramework, CommandResult};
 use regex::Regex;
 use redis::Commands;
-use redis::Conection;
 
 #[derive(Debug, Serialize, Deserialize)]
 struct UserInfo {
@@ -38,25 +37,26 @@ async fn scrape_leaderboard() -> Vec<UserInfo> {
 }
 
 async fn get_user_stats(username: &str) -> Option<UserInfo> {
-    let client = redis::Client::open("redis-cli -u redis://default:qJI0nbg5dpzEt5jrr2R1@containers-us-west-179.railway.app:7784").unwrap();
-    let mut con: Redis::Conection = client.get_connection().expect("Coooo");
-    con.get(username).expect("Coooooooo");
-    None
+    let client = redis::Client::open("redis://default:qJI0nbg5dpzEt5jrr2R1@containers-us-west-179.railway.app:7784").unwrap();
+    let mut con = client.get_connection().expect("Coooo");
 
-    // if let Some(value) = con.get(username) {
-    //     Some(UserInfo { username: username.to_string(), total_seconds: value })
-    // } else {
-    //     let api_url = format!("https://wakapi.krejzac.cz/api/compat/wakatime/v1/users/{}/stats/month", username);
-    //     let response = reqwest::get(api_url).await.unwrap();
+    if let Ok(value) = con.get::<&str, i32>(username) {
+        println!("Got value from cache");
+        Some(UserInfo { username: username.to_string(), total_seconds: value })
+    } else {
+        let api_url = format!("https://wakapi.krejzac.cz/api/compat/wakatime/v1/users/{}/stats/month", username);
+        let response = reqwest::get(api_url).await.unwrap();
 
-    //     return match response.json::<UserPayload>().await {
-    //         Ok(val) =>  {
-    //             con.setex(val.data.username, val.data.total_seconds, 60 * 3).unwrap();
-    //             Some(val.data)
-    //         },
-    //         Err(_) => None
-    //     }
-    // }
+        println!("Got value from API");
+
+        return match response.json::<UserPayload>().await {
+            Ok(val) =>  {
+                con.set_ex::<String, i32, String>(String::from(&val.data.username), val.data.total_seconds, 60 * 3).unwrap();
+                Some(UserInfo { username: String::from(val.data.username), total_seconds: val.data.total_seconds})
+            },
+            Err(_) => None
+        }
+    }
 }
 
 fn print_leaderboard(leaderboard: &Vec<UserInfo>) {
@@ -101,8 +101,6 @@ async fn main() {
 async fn vino(ctx: &Context, msg: &Message) -> CommandResult { 
     let leaderboard = scrape_leaderboard().await;
 
-    println!("{:?}", leaderboard);
-    
     let mut message = String::new();
 
     for (i, user_info) in leaderboard.iter().enumerate() {
@@ -113,10 +111,6 @@ async fn vino(ctx: &Context, msg: &Message) -> CommandResult {
             m.embed(|e| e
                 .colour(0x00ff00)
                 .field("Leaderboard", message, false)
-                .footer(|f| {
-                    f.text("🕒 Stats last updated @");
-                    f
-                })
             )
         }).await?;
 
