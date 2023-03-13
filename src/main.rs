@@ -109,7 +109,7 @@ async fn vino(ctx: &Context, msg: &Message) -> CommandResult {
     let mut message = String::new();
 
     for (i, user_info) in leaderboard.iter().enumerate() {
-        message.push_str(format!("{}) {} - {} hours\n", i + 1, user_info.username, user_info.total_seconds / (60 * 60) ).as_str());
+        message.push_str(format!("{}) {} - {:.2} hours\n", i + 1, user_info.username, user_info.total_seconds as f64 / (60 * 60) as f64).as_str());
     }
 
     msg.channel_id.send_message(&ctx.http, |m| {
