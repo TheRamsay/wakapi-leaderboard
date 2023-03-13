@@ -32,6 +32,7 @@ async fn scrape_leaderboard() -> Vec<UserInfo> {
             }
         }
 
+        leaderboard.sort_by_key(|user| -user.total_seconds);
         leaderboard
     } else {
         let mut leaderboard_string = String::new();
