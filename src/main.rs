@@ -64,7 +64,7 @@ async fn get_user_stats(username: &str) -> Option<UserInfo> {
 
         return match response.json::<UserPayload>().await {
             Ok(val) =>  {
-                con.set_ex::<String, i32, String>(String::from(&val.data.username), val.data.total_seconds, 60 * 3).unwrap();
+                con.set_ex::<String, i32, String>(String::from(&val.data.username), val.data.total_seconds, 60 * 15).unwrap();
                 Some(UserInfo { username: String::from(val.data.username), total_seconds: val.data.total_seconds})
             },
             Err(_) => None
