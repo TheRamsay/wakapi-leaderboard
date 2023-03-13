@@ -22,18 +22,33 @@ struct UserPayload {
 async fn scrape_leaderboard() -> Vec<UserInfo> {
     let mut leaderboard: Vec<UserInfo> = Vec::new();
 
-    let response = reqwest::get("https://wakapi.krejzac.cz/leaderboard").await.unwrap().text().await.unwrap();
-    let re = Regex::new(r#"<strong class="text-ellipsis truncate">@(\w+)</strong>"#).unwrap();
+    let client = redis::Client::open("redis://default:qJI0nbg5dpzEt5jrr2R1@containers-us-west-179.railway.app:7784").unwrap();
+    let mut con = client.get_connection().expect("Coooo");
 
-    for cap in re.captures_iter(&response) {
-        println!("Fetching info for {:?}...", &cap[1]);
-        if let Some(user_info) = get_user_stats(&cap[1]).await {
-            leaderboard.push(user_info);
+    if let Ok(value) = con.get::<&str, String>("members") {
+        for username in value.split(":") {
+            if let Some(user_info) = get_user_stats(username).await {
+                leaderboard.push(user_info);
+            }
         }
+
+        leaderboard
+    } else {
+        let mut leaderboard_string = String::new();
+        let response = reqwest::get("https://wakapi.krejzac.cz/leaderboard").await.unwrap().text().await.unwrap();
+        let re = Regex::new(r#"<strong class="text-ellipsis truncate">@(\w+)</strong>"#).unwrap();
+
+        for cap in re.captures_iter(&response) {
+            if let Some(user_info) = get_user_stats(&cap[1]).await {
+                leaderboard.push(user_info);
+                leaderboard_string.push_str(format!("{}:", &cap[1]).as_str());
+            }
+        }
+        
+        con.set_ex::<&str, String, String>("members", leaderboard_string, 60*60 * 6).unwrap();
+        leaderboard.sort_by_key(|user| -user.total_seconds);
+        leaderboard
     }
-    
-    leaderboard.sort_by_key(|user| -user.total_seconds);
-    leaderboard
 }
 
 async fn get_user_stats(username: &str) -> Option<UserInfo> {
@@ -41,13 +56,10 @@ async fn get_user_stats(username: &str) -> Option<UserInfo> {
     let mut con = client.get_connection().expect("Coooo");
 
     if let Ok(value) = con.get::<&str, i32>(username) {
-        println!("Got value from cache");
         Some(UserInfo { username: username.to_string(), total_seconds: value })
     } else {
         let api_url = format!("https://wakapi.krejzac.cz/api/compat/wakatime/v1/users/{}/stats/month", username);
         let response = reqwest::get(api_url).await.unwrap();
-
-        println!("Got value from API");
 
         return match response.json::<UserPayload>().await {
             Ok(val) =>  {
@@ -56,14 +68,6 @@ async fn get_user_stats(username: &str) -> Option<UserInfo> {
             },
             Err(_) => None
         }
-    }
-}
-
-fn print_leaderboard(leaderboard: &Vec<UserInfo>) {
-    for (i, user_info) in leaderboard.iter().enumerate() {
-        // format!("{}) {} - {:.2} hours", i + 1, user_info.username, user_info.total_seconds  as f64 / (60 * 60) as f64);
-        // format!("{}) {} - {:.2} hours", String::from("1"), String::from("ahoj"), String::from("dobry den"));
-        println!();
     }
 }
 
