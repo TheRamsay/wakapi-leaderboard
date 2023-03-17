@@ -1,6 +1,9 @@
-use std::fmt::format;
+use std::env;
+use dotenv::dotenv;
 use serde::{Deserialize, Serialize};
 use serenity::async_trait;
+use serenity::model::prelude::{Ready, GuildId};
+use serenity::model::prelude::interaction::{Interaction, InteractionResponseType};
 use serenity::prelude::*;
 use serenity::model::channel::Message;
 use serenity::framework::standard::macros::{command, group};
@@ -10,6 +13,7 @@ use redis::Commands;
 use futures::prelude::*;
 
 const REDIS_URL: &str= "redis://default:qJI0nbg5dpzEt5jrr2R1@containers-us-west-179.railway.app:7784";
+const LEADERBOARD_URL: &str = "https://wakapi.krejzac.cz/leaderboard";
 
 #[derive(Debug, Serialize, Deserialize)]
 struct UserInfo {
@@ -22,32 +26,32 @@ struct UserPayload {
     data: UserInfo
 }
 
-async fn get_leaderboard_members() -> Vec<String> {
-    let mut leaderboard_members: Vec<String> = Vec::new();
+async fn get_leaderboard_users() -> Vec<String> {
+    let mut leaderboard_users: Vec<String> = Vec::new();
 
     let client = redis::Client::open(REDIS_URL).unwrap();
     let mut con = client.get_connection().expect("Coooo");
 
     if let Ok(value) = con.get::<&str, String>("members") {
         for username in value.split(":") {
-            leaderboard_members.push(username.to_string());
+            leaderboard_users.push(username.to_string());
         }
     } else {
-        let response = reqwest::get("https://wakapi.krejzac.cz/leaderboard").await.unwrap().text().await.unwrap();
+        let response = reqwest::get(LEADERBOARD_URL).await.unwrap().text().await.unwrap();
         let re = Regex::new(r#"<strong class="text-ellipsis truncate">@(\w+)</strong>"#).unwrap();
 
         for cap in re.captures_iter(&response) {
-            leaderboard_members.push(cap[1].to_string());
+            leaderboard_users.push(cap[1].to_string());
         }
 
-        con.set_ex::<&str, String, String>("members", leaderboard_members.join(":"), 60*60 * 6).unwrap();
+        con.set_ex::<&str, String, String>("members", leaderboard_users.join(":"), 60*60 * 6).unwrap();
     }
 
-    leaderboard_members
+    leaderboard_users
 }
 
 async fn scrape_leaderboard() -> Vec<UserInfo> {
-    let users = get_leaderboard_members().await;
+    let users = get_leaderboard_users().await;
 
     let client = redis::Client::open(REDIS_URL).unwrap();
     let mut con = client.get_connection().expect("Coooo");
@@ -58,20 +62,10 @@ async fn scrape_leaderboard() -> Vec<UserInfo> {
     for username in users {
         if let Ok(total_seconds) = con.get::<&str, i32>(&username) {
             leaderboard.push(UserInfo { username: username.clone(), total_seconds });
-            println!("{} - cached", username);
         } else {
-            println!("{} - fetched", username);
             usernames_for_fetch.push(username);
         }
     }
-
-    // let futures = usernames_for_fetch.iter().map(|u| async move {
-    //     get_user_stats(u).await;
-    // });
-
-    // let stream = futures::stream::iter(futures).buffered(10);
-    // let results = stream.collect::<Vec<_>>().await;
-
 
     let results = future::join_all(usernames_for_fetch.into_iter().map(|u| async move { 
             let api_url = format!("https://wakapi.krejzac.cz/api/compat/wakatime/v1/users/{}/stats/month", u);
@@ -96,19 +90,6 @@ async fn scrape_leaderboard() -> Vec<UserInfo> {
     leaderboard
 }
 
-// async fn get_user_stats(username: &str) -> impl Future<Output = Result<reqwest::Response, reqwest::Error>>  {
-    // let api_url = format!("https://wakapi.krejzac.cz/api/compat/wakatime/v1/users/{}/stats/month", username);
-    // let response = reqwest::get(api_url).await.unwrap();
-    // reqwest::get(api_url)
-
-
-    // return match response.json::<UserPayload>().await {
-    //     Ok(val) =>  {
-    //         Some(UserInfo { username: String::from(val.data.username), total_seconds: val.data.total_seconds})
-    //     },
-    //     Err(_) => None
-    // }
-// }
 
 #[group]
 #[commands(vino)]
@@ -117,16 +98,44 @@ struct General;
 struct Handler;
 
 #[async_trait]
-impl EventHandler for Handler {}
+impl EventHandler for Handler {
+    async fn interaction_create(&self, ctx: Context, interaction: Interaction) {
+        if let Interaction::ApplicationCommand(command) = interaction {
+            let txt = vino_helper().await;
+
+            command.create_interaction_response(&ctx.http, |response| {
+                response
+                    .kind(InteractionResponseType::ChannelMessageWithSource)
+                    .interaction_response_data(|message| {
+                        message.embed(|e| e
+                            .colour(0x00ff00)
+                            .field("Leaderboard", txt, false)
+                        )
+                    })
+            }).await.expect("Cannot respond to slash command");
+        }
+    }
+
+    async fn ready(&self, ctx: Context, ready: Ready) {
+        let guild_id = GuildId(
+            env::var("GUILD_ID")
+                .expect("Expected GUILD_ID in environment")
+                .parse()
+                .expect("GUILD_ID must be an integer")
+        );
+    }
+}
 
 #[tokio::main]
 async fn main() {
+    dotenv().ok();
+
     let framework = StandardFramework::new()
         .configure(|c| c.prefix("vim ")) // set the bot's prefix to "~"
         .group(&GENERAL_GROUP);
 
     // Login with a bot token from the environment
-    let token = "***REMOVED***";
+    let token = env::var("DISCORD_TOKEN").expect("Expected a token in the environment");
     let intents = GatewayIntents::non_privileged() | GatewayIntents::MESSAGE_CONTENT;
     let mut client = Client::builder(token, intents)
         .event_handler(Handler)
@@ -140,8 +149,7 @@ async fn main() {
     }
 }
 
-#[command]
-async fn vino(ctx: &Context, msg: &Message) -> CommandResult { 
+async fn vino_helper() -> String {
     let leaderboard = scrape_leaderboard().await;
 
     let mut message = String::new();
@@ -149,6 +157,13 @@ async fn vino(ctx: &Context, msg: &Message) -> CommandResult {
     for (i, user_info) in leaderboard.iter().enumerate() {
         message.push_str(format!("{}) {} - {:.2} hours\n", i + 1, user_info.username, user_info.total_seconds as f64 / (60 * 60) as f64).as_str());
     }
+
+    message
+}
+
+#[command]
+async fn vino(ctx: &Context, msg: &Message) -> CommandResult { 
+    let message = vino_helper().await;
 
     msg.channel_id.send_message(&ctx.http, |m| {
             m.embed(|e| e
