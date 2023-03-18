@@ -1,7 +1,9 @@
 use std::env;
+use chrono::{Local};
 use dotenv::dotenv;
+use poise::serenity_prelude::CreateEmbed;
 use serde::{Deserialize, Serialize};
-use serenity::async_trait;
+use serenity::{async_trait, cache};
 use serenity::model::prelude::{Ready, GuildId};
 use serenity::model::prelude::interaction::{Interaction, InteractionResponseType};
 use serenity::prelude::*;
@@ -9,7 +11,7 @@ use serenity::model::channel::Message;
 use serenity::framework::standard::macros::{command, group};
 use serenity::framework::standard::{StandardFramework, CommandResult};
 use regex::Regex;
-use redis::Commands;
+use redis::{Commands, Connection};
 use futures::prelude::*;
 
 const REDIS_URL: &str= "redis://default:qJI0nbg5dpzEt5jrr2R1@containers-us-west-179.railway.app:7784";
@@ -26,11 +28,15 @@ struct UserPayload {
     data: UserInfo
 }
 
+fn get_redis_connection() -> Connection {
+    let client = redis::Client::open(REDIS_URL).unwrap();
+    client.get_connection().expect("Can't connect to Redis")
+}
+
 async fn get_leaderboard_users() -> Vec<String> {
     let mut leaderboard_users: Vec<String> = Vec::new();
 
-    let client = redis::Client::open(REDIS_URL).unwrap();
-    let mut con = client.get_connection().expect("Coooo");
+    let mut con = get_redis_connection();
 
     if let Ok(value) = con.get::<&str, String>("members") {
         for username in value.split(":") {
@@ -53,8 +59,7 @@ async fn get_leaderboard_users() -> Vec<String> {
 async fn scrape_leaderboard() -> Vec<UserInfo> {
     let users = get_leaderboard_users().await;
 
-    let client = redis::Client::open(REDIS_URL).unwrap();
-    let mut con = client.get_connection().expect("Coooo");
+    let mut con = get_redis_connection();
 
     let mut leaderboard: Vec<UserInfo> = Vec::new();
     let mut usernames_for_fetch: Vec<String> = Vec::new();
@@ -83,6 +88,7 @@ async fn scrape_leaderboard() -> Vec<UserInfo> {
         if let Some(user_info) = result {
             leaderboard.push(UserInfo { username: user_info.username.clone(), total_seconds: user_info.total_seconds });
             con.set_ex::<String, i32, String>(user_info.username.clone(), user_info.total_seconds, 60 * 15).unwrap();
+            con.set::<&str, &str, String>("last_update", Local::now().format("%F %H:%M:%S").to_string().as_str()).unwrap();
         }
     }
 
@@ -101,28 +107,14 @@ struct Handler;
 impl EventHandler for Handler {
     async fn interaction_create(&self, ctx: Context, interaction: Interaction) {
         if let Interaction::ApplicationCommand(command) = interaction {
-            let txt = vino_helper().await;
+            let text = vino_helper().await;
 
             command.create_interaction_response(&ctx.http, |response| {
                 response
                     .kind(InteractionResponseType::ChannelMessageWithSource)
-                    .interaction_response_data(|message| {
-                        message.embed(|e| e
-                            .colour(0x00ff00)
-                            .field("Leaderboard", txt, false)
-                        )
-                    })
+                    .interaction_response_data(|message| message.embed(|e| create_embed(text, e)))
             }).await.expect("Cannot respond to slash command");
         }
-    }
-
-    async fn ready(&self, ctx: Context, ready: Ready) {
-        let guild_id = GuildId(
-            env::var("GUILD_ID")
-                .expect("Expected GUILD_ID in environment")
-                .parse()
-                .expect("GUILD_ID must be an integer")
-        );
     }
 }
 
@@ -131,7 +123,7 @@ async fn main() {
     dotenv().ok();
 
     let framework = StandardFramework::new()
-        .configure(|c| c.prefix("vim ")) // set the bot's prefix to "~"
+        .configure(|c| c.prefix("vim "))
         .group(&GENERAL_GROUP);
 
     // Login with a bot token from the environment
@@ -161,16 +153,22 @@ async fn vino_helper() -> String {
     message
 }
 
+fn create_embed(text: String, embed: &mut CreateEmbed) -> &mut CreateEmbed {
+    let mut con = get_redis_connection();
+
+    embed.colour(0xa0517d)
+    .title("🍷 Vino leaderboard 🍷")
+    .field("", text, false)
+    .footer(|f| {
+        f.text(format!("Last update: {}", con.get::<&str, String>("last_update").unwrap_or("unknown".to_string())))
+    })
+}
+
 #[command]
 async fn vino(ctx: &Context, msg: &Message) -> CommandResult { 
-    let message = vino_helper().await;
+    let text = vino_helper().await;
 
-    msg.channel_id.send_message(&ctx.http, |m| {
-            m.embed(|e| e
-                .colour(0x00ff00)
-                .field("Leaderboard", message, false)
-            )
-        }).await?;
+    msg.channel_id.send_message(&ctx.http, |m| m.embed(|e| create_embed(text, e))).await?;
 
     Ok(())
 }
