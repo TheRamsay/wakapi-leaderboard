@@ -123,7 +123,7 @@ async fn main() {
     dotenv().ok();
 
     let framework = StandardFramework::new()
-        .configure(|c| c.prefix("vim "))
+        .configure(|c| c.prefix("vim ").case_insensitivity(true))
         .group(&GENERAL_GROUP);
 
     // Login with a bot token from the environment
