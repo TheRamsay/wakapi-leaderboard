@@ -1,0 +1,13 @@
+services:
+  bot:
+    build: . 
+    env_file:
+      - .env
+    restart: always
+    depends_on:
+      - cache
+  cache:
+    image: redis:alpine
+    restart: always
+    ports:
+      - '6739:6739'
