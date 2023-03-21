@@ -2179,6 +2179,7 @@ dependencies = [
  "dotenv",
  "env",
  "futures",
+ "lazy_static",
  "poise",
  "redis",
  "regex",

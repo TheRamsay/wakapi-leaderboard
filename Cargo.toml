@@ -10,6 +10,7 @@ chrono = "0.4.24"
 dotenv = "0.15.0"
 env = "0.0.0"
 futures = "0.3.27"
+lazy_static = "1.4.0"
 poise = "0.5.2"
 redis =  { version = "0.22.3", features = ["tokio-comp"] }
 regex = "1.7.1"

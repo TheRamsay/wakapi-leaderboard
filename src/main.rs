@@ -1,10 +1,10 @@
 use std::env;
-use chrono::{Local};
+use chrono::{Local, Utc, NaiveDateTime, DateTime};
 use dotenv::dotenv;
+use lazy_static::lazy_static;
 use poise::serenity_prelude::CreateEmbed;
 use serde::{Deserialize, Serialize};
-use serenity::{async_trait, cache};
-use serenity::model::prelude::{Ready, GuildId};
+use serenity::{async_trait};
 use serenity::model::prelude::interaction::{Interaction, InteractionResponseType};
 use serenity::prelude::*;
 use serenity::model::channel::Message;
@@ -14,7 +14,17 @@ use regex::Regex;
 use redis::{Commands, Connection};
 use futures::prelude::*;
 
-const REDIS_URL: &str= "redis://default:qJI0nbg5dpzEt5jrr2R1@containers-us-west-179.railway.app:7784";
+lazy_static! {
+    static ref REDIS_URL: String = env::var("REDIS_HOST").expect("Expected a token in the environment");
+    static ref REDIS_PORT: u32 = env::var("REDIS_PORT")
+        .expect("Expected a token in the environment")
+        .parse()
+        .expect("Port has to be an integer.");
+    static ref REDIS_CLIENT: redis::Connection = get_redis_connection();
+}
+
+const REDIS_LEADERBOARD_MEMBERS_KEY: &str = "members";
+const REDIS_LAST_UPDATE_KEY: &str = "last_update";
 const LEADERBOARD_URL: &str = "https://wakapi.krejzac.cz/leaderboard";
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -29,8 +39,13 @@ struct UserPayload {
 }
 
 fn get_redis_connection() -> Connection {
-    let client = redis::Client::open(REDIS_URL).unwrap();
+    let client = redis::Client::open(format!("redis://{}:{}/", *REDIS_URL, *REDIS_PORT)).unwrap();
     client.get_connection().expect("Can't connect to Redis")
+}
+
+fn get_current_datetime() -> String {
+    let tz = chrono::FixedOffset::east_opt(1 * 3600).unwrap();
+    Local::now().with_timezone(&tz).format("%F %H:%M:%S").to_string()
 }
 
 async fn get_leaderboard_users() -> Vec<String> {
@@ -38,7 +53,7 @@ async fn get_leaderboard_users() -> Vec<String> {
 
     let mut con = get_redis_connection();
 
-    if let Ok(value) = con.get::<&str, String>("members") {
+    if let Ok(value) = con.get::<&str, String>(REDIS_LEADERBOARD_MEMBERS_KEY) {
         for username in value.split(":") {
             leaderboard_users.push(username.to_string());
         }
@@ -50,7 +65,7 @@ async fn get_leaderboard_users() -> Vec<String> {
             leaderboard_users.push(cap[1].to_string());
         }
 
-        con.set_ex::<&str, String, String>("members", leaderboard_users.join(":"), 60*60 * 6).unwrap();
+        con.set_ex::<&str, String, String>(REDIS_LEADERBOARD_MEMBERS_KEY, leaderboard_users.join(":"), 60*60 * 6).unwrap();
     }
 
     leaderboard_users
@@ -88,7 +103,8 @@ async fn scrape_leaderboard() -> Vec<UserInfo> {
         if let Some(user_info) = result {
             leaderboard.push(UserInfo { username: user_info.username.clone(), total_seconds: user_info.total_seconds });
             con.set_ex::<String, i32, String>(user_info.username.clone(), user_info.total_seconds, 60 * 15).unwrap();
-            con.set::<&str, &str, String>("last_update", Local::now().format("%F %H:%M:%S").to_string().as_str()).unwrap();
+
+            con.set::<&str, &str, String>(REDIS_LAST_UPDATE_KEY, &get_current_datetime()).unwrap();
         }
     }
 
@@ -160,7 +176,7 @@ fn create_embed(text: String, embed: &mut CreateEmbed) -> &mut CreateEmbed {
     .title("🍷 Vino leaderboard 🍷")
     .field("", text, false)
     .footer(|f| {
-        f.text(format!("Last update: {}", con.get::<&str, String>("last_update").unwrap_or("unknown".to_string())))
+        f.text(format!("Last update: {}", con.get::<&str, String>(REDIS_LAST_UPDATE_KEY).unwrap_or("unknown".to_string())))
     })
 }
 
