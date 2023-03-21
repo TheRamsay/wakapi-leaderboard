@@ -16,11 +16,12 @@ use futures::prelude::*;
 
 lazy_static! {
     static ref REDIS_URL: String = env::var("REDIS_HOST").expect("Expected a token in the environment");
+    static ref REDIS_USERNAME: String = env::var("REDIS_USERNAME").expect("Expected a token in the environment");
+    static ref REDIS_PASSWORD: String = env::var("REDIS_PASSWORD").expect("Expected a token in the environment");
     static ref REDIS_PORT: u32 = env::var("REDIS_PORT")
         .expect("Expected a token in the environment")
         .parse()
         .expect("Port has to be an integer.");
-    static ref REDIS_CLIENT: redis::Connection = get_redis_connection();
 }
 
 const REDIS_LEADERBOARD_MEMBERS_KEY: &str = "members";
@@ -39,7 +40,7 @@ struct UserPayload {
 }
 
 fn get_redis_connection() -> Connection {
-    let client = redis::Client::open(format!("redis://{}:{}/", *REDIS_URL, *REDIS_PORT)).unwrap();
+    let client = redis::Client::open(format!("redis://{}:{}@{}:{}/", *REDIS_USERNAME, *REDIS_PASSWORD, *REDIS_URL, *REDIS_PORT)).unwrap();
     client.get_connection().expect("Can't connect to Redis")
 }
 
