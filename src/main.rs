@@ -1,8 +1,10 @@
+use std::collections::HashMap;
 use std::env;
-use chrono::{Local, Utc, NaiveDateTime, DateTime};
+use chrono::{Local, Utc, NaiveDateTime, DateTime, Datelike, NaiveDate};
+use cronjob::CronJob;
 use dotenv::dotenv;
 use lazy_static::lazy_static;
-use poise::serenity_prelude::CreateEmbed;
+use poise::serenity_prelude::{CreateEmbed, ChannelId};
 use serde::{Deserialize, Serialize};
 use serenity::{async_trait};
 use serenity::model::prelude::interaction::{Interaction, InteractionResponseType};
@@ -25,16 +27,17 @@ lazy_static! {
 }
 
 const REDIS_LEADERBOARD_MEMBERS_KEY: &str = "members";
+const REDIS_WINNER_KEY: &str = "winner";
 const REDIS_LAST_UPDATE_KEY: &str = "last_update";
 const LEADERBOARD_URL: &str = "https://wakapi.krejzac.cz/leaderboard";
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 struct UserInfo {
     username: String,
     total_seconds: i32,
 }
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 struct UserPayload {
     data: UserInfo
 }
@@ -49,31 +52,35 @@ fn get_current_datetime() -> String {
     Local::now().with_timezone(&tz).format("%F %H:%M:%S").to_string()
 }
 
-async fn get_leaderboard_users() -> Vec<String> {
+async fn get_leaderboard_users(try_cache: bool) -> Vec<String> {
     let mut leaderboard_users: Vec<String> = Vec::new();
 
     let mut con = get_redis_connection();
 
-    if let Ok(value) = con.get::<&str, String>(REDIS_LEADERBOARD_MEMBERS_KEY) {
-        for username in value.split(":") {
-            leaderboard_users.push(username.to_string());
-        }
-    } else {
-        let response = reqwest::get(LEADERBOARD_URL).await.unwrap().text().await.unwrap();
-        let re = Regex::new(r#"<strong class="text-ellipsis truncate">@(\w+)</strong>"#).unwrap();
+    if try_cache {
+        if let Ok(value) = con.get::<&str, String>(REDIS_LEADERBOARD_MEMBERS_KEY) {
+            for username in value.split(":") {
+                leaderboard_users.push(username.to_string());
+            }
 
-        for cap in re.captures_iter(&response) {
-            leaderboard_users.push(cap[1].to_string());
+            return leaderboard_users;
         }
-
-        con.set_ex::<&str, String, String>(REDIS_LEADERBOARD_MEMBERS_KEY, leaderboard_users.join(":"), 60*60 * 6).unwrap();
     }
 
+    let response = reqwest::get(LEADERBOARD_URL).await.unwrap().text().await.unwrap();
+    let re = Regex::new(r#"<strong class="text-e🍷 llipsis truncate">@(\w+)</strong>"#).unwrap();
+
+    for cap in re.captures_iter(&response) {
+        leaderboard_users.push(cap[1].to_string());
+    }
+
+    con.set_ex::<&str, String, String>(REDIS_LEADERBOARD_MEMBERS_KEY, leaderboard_users.join(":"), 60*60 * 6).unwrap();
     leaderboard_users
+
 }
 
-async fn scrape_leaderboard() -> Vec<UserInfo> {
-    let users = get_leaderboard_users().await;
+async fn scrape_leaderboard(try_cache: bool) -> Vec<UserInfo> {
+    let users = get_leaderboard_users(try_cache).await;
 
     let mut con = get_redis_connection();
 
@@ -81,11 +88,14 @@ async fn scrape_leaderboard() -> Vec<UserInfo> {
     let mut usernames_for_fetch: Vec<String> = Vec::new();
 
     for username in users {
-        if let Ok(total_seconds) = con.get::<&str, i32>(&username) {
-            leaderboard.push(UserInfo { username: username.clone(), total_seconds });
-        } else {
-            usernames_for_fetch.push(username);
+        if try_cache {
+            if let Ok(total_seconds) = con.get::<&str, i32>(&username) {
+                leaderboard.push(UserInfo { username: username.clone(), total_seconds });
+                continue;
+            }
         }
+
+        usernames_for_fetch.push(username);
     }
 
     let results = future::join_all(usernames_for_fetch.into_iter().map(|u| async move { 
@@ -113,9 +123,34 @@ async fn scrape_leaderboard() -> Vec<UserInfo> {
     leaderboard
 }
 
+async fn montly_save(context: Context) {
+    loop {
+        let now: DateTime<Local> = Local::now();
+
+        let last_day_of_month = NaiveDate::from_ymd_opt(now.year(), now.month(), 1)
+            .unwrap()
+            .with_month(now.month() + 1)
+            .unwrap_or_else(|| NaiveDate::from_ymd_opt(now.year() + 1, 1, 1).unwrap())
+            .pred_opt().unwrap();
+
+        let duration_until_last_day_of_month = last_day_of_month
+            .signed_duration_since(now.date_naive())
+            .to_std().unwrap();
+
+        tokio::time::sleep(duration_until_last_day_of_month).await;
+
+        let mut con = get_redis_connection();
+        let winner = scrape_leaderboard(true).await.first().unwrap().clone();
+        let winner_text = format!("{} - {:.4}", winner.username, winner.total_seconds as f64 / (60 * 60) as f64);
+        con.set::<&str, String, String>(REDIS_WINNER_KEY, winner_text).unwrap();
+
+        let text = vino_helper().await;
+        ChannelId(1035650959512174604).send_message(&context.http, |m| m.embed(|e| create_winner_embed(text, e))).await;
+    }
+}
 
 #[group]
-#[commands(vino)]
+#[commands(vitez, vino)]
 struct General;
 
 struct Handler;
@@ -124,14 +159,31 @@ struct Handler;
 impl EventHandler for Handler {
     async fn interaction_create(&self, ctx: Context, interaction: Interaction) {
         if let Interaction::ApplicationCommand(command) = interaction {
-            let text = vino_helper().await;
+
+            let text = match command.data.name.as_str() {
+                "vino" => vino_helper().await,
+                "vitez" => vitez_helper().await,
+                _ => "".to_string()
+            };
 
             command.create_interaction_response(&ctx.http, |response| {
                 response
                     .kind(InteractionResponseType::ChannelMessageWithSource)
-                    .interaction_response_data(|message| message.embed(|e| create_embed(text, e)))
+                    .interaction_response_data(|message| {
+                        message.embed(|e| {
+                            match command.data.name.as_str() {
+                                "vino" => create_leaderboard_embed(text, e),
+                                "vitez" => create_winner_embed(text, e),
+                                _ => unimplemented!("Coooo")
+                            }
+                        })
+                    })
             }).await.expect("Cannot respond to slash command");
         }
+    }
+
+    async fn ready(&self, ctx: Context, msg: poise::serenity_prelude::Ready) {
+        tokio::spawn(montly_save(ctx.clone()));
     }
 }
 
@@ -158,19 +210,7 @@ async fn main() {
     }
 }
 
-async fn vino_helper() -> String {
-    let leaderboard = scrape_leaderboard().await;
-
-    let mut message = String::new();
-
-    for (i, user_info) in leaderboard.iter().enumerate() {
-        message.push_str(format!("{}) {} - {:.2} hours\n", i + 1, user_info.username, user_info.total_seconds as f64 / (60 * 60) as f64).as_str());
-    }
-
-    message
-}
-
-fn create_embed(text: String, embed: &mut CreateEmbed) -> &mut CreateEmbed {
+fn create_leaderboard_embed(text: String, embed: &mut CreateEmbed) -> &mut CreateEmbed {
     let mut con = get_redis_connection();
 
     embed.colour(0xa0517d)
@@ -181,11 +221,43 @@ fn create_embed(text: String, embed: &mut CreateEmbed) -> &mut CreateEmbed {
     })
 }
 
+fn create_winner_embed(text: String, embed: &mut CreateEmbed) -> &mut CreateEmbed {
+    embed.color(0xeda42f)
+    .title("🥇 Vino vitez 🥇")
+    .field("", text, false)
+    .footer(|f| f.text("🍷 mnam mnam 🍷"))
+}
+
+async fn vitez_helper() -> String {
+    let mut con = get_redis_connection();
+    con.get::<&str, String>(REDIS_WINNER_KEY).unwrap_or("No winner yet".to_string())
+}
+
+async fn vino_helper() -> String {
+    let leaderboard = scrape_leaderboard(true).await;
+
+    let mut message = String::new();
+
+    for (i, user_info) in leaderboard.iter().enumerate() {
+        message.push_str(format!("{}) {} - {:.2} hours\n", i + 1, user_info.username, user_info.total_seconds as f64 / (60 * 60) as f64).as_str());
+    }
+
+    message
+}
+#[command]
+async fn vitez(ctx: &Context, msg: &Message) -> CommandResult {
+    let winner = vitez_helper().await;
+
+    msg.channel_id.send_message(&ctx.http, |m| m.embed(|e| create_winner_embed(winner, e))).await?;
+
+    Ok(())
+}
+
 #[command]
 async fn vino(ctx: &Context, msg: &Message) -> CommandResult { 
     let text = vino_helper().await;
 
-    msg.channel_id.send_message(&ctx.http, |m| m.embed(|e| create_embed(text, e))).await?;
+    msg.channel_id.send_message(&ctx.http, |m| m.embed(|e| create_leaderboard_embed(text, e))).await?;
 
     Ok(())
 }
