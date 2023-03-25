@@ -4,7 +4,7 @@ use chrono::{Local, Utc, NaiveDateTime, DateTime, Datelike, NaiveDate};
 use cronjob::CronJob;
 use dotenv::dotenv;
 use lazy_static::lazy_static;
-use poise::serenity_prelude::{CreateEmbed, ChannelId};
+use poise::serenity_prelude::{CreateEmbed, ChannelId, Command};
 use serde::{Deserialize, Serialize};
 use serenity::{async_trait};
 use serenity::model::prelude::interaction::{Interaction, InteractionResponseType};
@@ -17,6 +17,12 @@ use redis::{Commands, Connection};
 use futures::prelude::*;
 
 lazy_static! {
+    static ref CHANNEL_ID: u64 = env::var("CHANNEL_ID").expect("Expected a channel ID in the environment")
+        .parse()
+        .expect("Channel ID has to be an integer");
+    static ref ADMIN_ID: u64 = env::var("ADMIN_ID").expect("Expected a admin ID in the environment")
+        .parse()
+        .expect("Admin ID has to be an integer");
     static ref REDIS_URL: String = env::var("REDIS_HOST").expect("Expected a token in the environment");
     static ref REDIS_USERNAME: String = env::var("REDIS_USERNAME").expect("Expected a token in the environment");
     static ref REDIS_PASSWORD: String = env::var("REDIS_PASSWORD").expect("Expected a token in the environment");
@@ -68,7 +74,7 @@ async fn get_leaderboard_users(try_cache: bool) -> Vec<String> {
     }
 
     let response = reqwest::get(LEADERBOARD_URL).await.unwrap().text().await.unwrap();
-    let re = Regex::new(r#"<strong class="text-e🍷 llipsis truncate">@(\w+)</strong>"#).unwrap();
+    let re = Regex::new(r#"<strong class="text-ellipsis truncate">@(\w+)</strong>"#).unwrap();
 
     for cap in re.captures_iter(&response) {
         leaderboard_users.push(cap[1].to_string());
@@ -140,12 +146,12 @@ async fn montly_save(context: Context) {
         tokio::time::sleep(duration_until_last_day_of_month).await;
 
         let mut con = get_redis_connection();
-        let winner = scrape_leaderboard(true).await.first().unwrap().clone();
+        let winner = scrape_leaderboard(false).await.first().unwrap().clone();
         let winner_text = format!("{} - {:.4}", winner.username, winner.total_seconds as f64 / (60 * 60) as f64);
         con.set::<&str, String, String>(REDIS_WINNER_KEY, winner_text).unwrap();
 
         let text = vino_helper().await;
-        ChannelId(1035650959512174604).send_message(&context.http, |m| m.embed(|e| create_winner_embed(text, e))).await;
+        ChannelId(*CHANNEL_ID).send_message(&context.http, |m| m.embed(|e| create_winner_embed(text, e))).await.unwrap();
     }
 }
 
@@ -183,6 +189,9 @@ impl EventHandler for Handler {
     }
 
     async fn ready(&self, ctx: Context, msg: poise::serenity_prelude::Ready) {
+        Command::create_global_application_command(&ctx.http, |command| command.name("vino").description("Tabulkaa?")).await.unwrap();
+        Command::create_global_application_command(&ctx.http, |command| command.name("vitez").description("Kdo vyhraaal")).await.unwrap();
+
         tokio::spawn(montly_save(ctx.clone()));
     }
 }
@@ -230,7 +239,7 @@ fn create_winner_embed(text: String, embed: &mut CreateEmbed) -> &mut CreateEmbe
 
 async fn vitez_helper() -> String {
     let mut con = get_redis_connection();
-    con.get::<&str, String>(REDIS_WINNER_KEY).unwrap_or("No winner yet".to_string())
+    con.get::<&str, String>(REDIS_WINNER_KEY).unwrap_or("Zatial neni 😴🍷".to_string())
 }
 
 async fn vino_helper() -> String {
