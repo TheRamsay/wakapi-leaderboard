@@ -1,10 +1,8 @@
-use std::collections::HashMap;
 use std::env;
 use chrono::{Local, Utc, NaiveDateTime, DateTime, Datelike, NaiveDate};
-use cronjob::CronJob;
 use dotenv::dotenv;
 use lazy_static::lazy_static;
-use poise::serenity_prelude::{CreateEmbed, ChannelId, Command};
+use poise::serenity_prelude::{CreateEmbed, ChannelId, Command, InteractionResponseFlags};
 use serde::{Deserialize, Serialize};
 use serenity::{async_trait};
 use serenity::model::prelude::interaction::{Interaction, InteractionResponseType};
@@ -166,6 +164,27 @@ impl EventHandler for Handler {
     async fn interaction_create(&self, ctx: Context, interaction: Interaction) {
         if let Interaction::ApplicationCommand(command) = interaction {
 
+            if command.data.name == "clear"{
+
+                if *command.user.id.as_u64() != *ADMIN_ID {
+                    command.create_interaction_response(&ctx.http, |response| {
+                        response.kind(InteractionResponseType::ChannelMessageWithSource).interaction_response_data(|message| {
+                            message.flags(InteractionResponseFlags::EPHEMERAL).content("A ven ⚠️")
+                        })
+                    }).await.unwrap();
+                    return;
+                }
+
+                clear().await;
+                command.create_interaction_response(&ctx.http, |response| {
+                    response.kind(InteractionResponseType::ChannelMessageWithSource).interaction_response_data(|message| {
+                        message.flags(InteractionResponseFlags::EPHEMERAL).content("Vycisteno 🧹")
+                    })
+                }).await.unwrap();
+
+                return;
+            }
+
             let text = match command.data.name.as_str() {
                 "vino" => vino_helper().await,
                 "vitez" => vitez_helper().await,
@@ -189,8 +208,11 @@ impl EventHandler for Handler {
     }
 
     async fn ready(&self, ctx: Context, msg: poise::serenity_prelude::Ready) {
-        Command::create_global_application_command(&ctx.http, |command| command.name("vino").description("Tabulkaa?")).await.unwrap();
-        Command::create_global_application_command(&ctx.http, |command| command.name("vitez").description("Kdo vyhraaal")).await.unwrap();
+        
+        
+        Command::create_global_application_command(&ctx.http, |command| command.name("vino").description("Tabulka frajeru")).await.unwrap();
+        Command::create_global_application_command(&ctx.http, |command| command.name("vitez").description("Majitel vina")).await.unwrap();
+        Command::create_global_application_command(&ctx.http, |command| command.name("clear").description("Vycisteni cache")).await.unwrap();
 
         tokio::spawn(montly_save(ctx.clone()));
     }
@@ -216,6 +238,24 @@ async fn main() {
     // start listening for events by starting a single shard
     if let Err(why) = client.start().await {
         println!("An error occurred while running the client: {:?}", why);
+    }
+}
+
+async fn clear() { 
+    let mut con = get_redis_connection();
+
+    let mut keys_to_delete = vec![];
+    let users = get_leaderboard_users(true).await;
+
+    for username in users {
+        keys_to_delete.push(username);
+    }
+
+    keys_to_delete.push(String::from(REDIS_LAST_UPDATE_KEY));
+    keys_to_delete.push(String::from(REDIS_LEADERBOARD_MEMBERS_KEY));
+
+    for key in keys_to_delete {
+        con.del::<String, String>(key);
     }
 }
 
@@ -253,6 +293,7 @@ async fn vino_helper() -> String {
 
     message
 }
+
 #[command]
 async fn vitez(ctx: &Context, msg: &Message) -> CommandResult {
     let winner = vitez_helper().await;
