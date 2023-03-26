@@ -52,7 +52,7 @@ fn get_redis_connection() -> Connection {
 }
 
 fn get_current_datetime() -> String {
-    let tz = chrono::FixedOffset::east_opt(1* 3600).unwrap();
+    let tz = chrono::FixedOffset::east_opt(2 * 3600).unwrap();
     Local::now().with_timezone(&tz).format("%F %H:%M:%S").to_string()
 }
 
