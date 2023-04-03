@@ -127,7 +127,7 @@ async fn scrape_leaderboard(try_cache: bool) -> Vec<UserInfo> {
     leaderboard
 }
 
-async fn montly_save(context: Context) {
+async fn monthly_save(context: Context) {
     loop {
         let now: DateTime<Local> = Local::now();
 
@@ -214,7 +214,7 @@ impl EventHandler for Handler {
         Command::create_global_application_command(&ctx.http, |command| command.name("vitez").description("Majitel vina")).await.unwrap();
         Command::create_global_application_command(&ctx.http, |command| command.name("clear").description("Vycisteni cache")).await.unwrap();
 
-        tokio::spawn(montly_save(ctx.clone()));
+        tokio::spawn(monthly_save(ctx.clone()));
     }
 }
 
