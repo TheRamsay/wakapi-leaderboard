@@ -15,6 +15,7 @@ use redis::{Commands, Connection};
 use futures::prelude::*;
 
 lazy_static! {
+    static ref WAKAPI_DOMAIN: String = env::var("WAKAPI_DOMAIN").expect("Expected wakapi domain in the environment");
     static ref CHANNEL_ID: u64 = env::var("CHANNEL_ID").expect("Expected a channel ID in the environment")
         .parse()
         .expect("Channel ID has to be an integer");
@@ -33,7 +34,6 @@ lazy_static! {
 const REDIS_LEADERBOARD_MEMBERS_KEY: &str = "members";
 const REDIS_WINNER_KEY: &str = "winner";
 const REDIS_LAST_UPDATE_KEY: &str = "last_update";
-const LEADERBOARD_URL: &str = "https://wakapi.krejzac.cz/leaderboard";
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 struct UserInfo {
@@ -71,7 +71,8 @@ async fn get_leaderboard_users(try_cache: bool) -> Vec<String> {
         }
     }
 
-    let response = reqwest::get(LEADERBOARD_URL).await.unwrap().text().await.unwrap();
+    let leaderboard_endpoint = format!("https://{}/leaderboard", WAKAPI_DOMAIN.as_str());
+    let response = reqwest::get(leaderboard_endpoint).await.unwrap().text().await.unwrap();
     let re = Regex::new(r#"<strong class="text-ellipsis truncate">@(\w+)</strong>"#).unwrap();
 
     for cap in re.captures_iter(&response) {
@@ -102,8 +103,8 @@ async fn scrape_leaderboard(try_cache: bool) -> Vec<UserInfo> {
         usernames_for_fetch.push(username);
     }
 
-    let results = future::join_all(usernames_for_fetch.into_iter().map(|u| async move { 
-            let api_url = format!("https://wakapi.krejzac.cz/api/compat/wakatime/v1/users/{}/stats/month", u);
+    let results = future::join_all(usernames_for_fetch.into_iter().map(|u| async move {
+            let api_url = format!("https://{}/api/compat/wakatime/v1/users/{}/stats/month", WAKAPI_DOMAIN.as_str(), u);
             let response = reqwest::get(api_url).await.unwrap();
 
             return match response.json::<UserPayload>().await {
