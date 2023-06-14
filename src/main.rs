@@ -9,7 +9,7 @@ use serenity::model::prelude::interaction::{Interaction, InteractionResponseType
 use serenity::prelude::*;
 use serenity::model::channel::Message;
 use serenity::framework::standard::macros::{command, group};
-use serenity::framework::standard::{StandardFramework, CommandResult};
+use serenity::framework::standard::{StandardFramework, CommandResult, Args};
 use regex::Regex;
 use redis::{Commands, Connection};
 use futures::prelude::*;
@@ -36,9 +36,22 @@ const REDIS_WINNER_KEY: &str = "winner";
 const REDIS_LAST_UPDATE_KEY: &str = "last_update";
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
+struct LanguageInfo {
+    digital: String,
+    hours: i32,
+    minutes: i32,
+    seconds: i32,
+    percent: f32,
+    name: String,
+    text: String,
+    total_seconds: i32
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
 struct UserInfo {
     username: String,
     total_seconds: i32,
+    languages: Vec<LanguageInfo>
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -95,7 +108,7 @@ async fn scrape_leaderboard(try_cache: bool) -> Vec<UserInfo> {
     for username in users {
         if try_cache {
             if let Ok(total_seconds) = con.get::<&str, i32>(&username) {
-                leaderboard.push(UserInfo { username: username.clone(), total_seconds });
+                leaderboard.push(UserInfo { username: username.clone(), total_seconds, languages: vec![] });
                 continue;
             }
         }
@@ -109,7 +122,7 @@ async fn scrape_leaderboard(try_cache: bool) -> Vec<UserInfo> {
 
             return match response.json::<UserPayload>().await {
                 Ok(val) =>  {
-                    Some(UserInfo { username: String::from(val.data.username), total_seconds: val.data.total_seconds})
+                    Some(UserInfo { username: String::from(val.data.username), total_seconds: val.data.total_seconds, languages: vec![]})
                 },
                 Err(_) => None
             }
@@ -117,7 +130,7 @@ async fn scrape_leaderboard(try_cache: bool) -> Vec<UserInfo> {
 
     for result in results.iter() {
         if let Some(user_info) = result {
-            leaderboard.push(UserInfo { username: user_info.username.clone(), total_seconds: user_info.total_seconds });
+            leaderboard.push(UserInfo { username: user_info.username.clone(), total_seconds: user_info.total_seconds, languages: vec![] });
             con.set_ex::<String, i32, String>(user_info.username.clone(), user_info.total_seconds, 60 * 15).unwrap();
 
             con.set::<&str, &str, String>(REDIS_LAST_UPDATE_KEY, &get_current_datetime()).unwrap();
@@ -155,7 +168,7 @@ async fn monthly_save(context: Context) {
 }
 
 #[group]
-#[commands(vitez, vino)]
+#[commands(vitez, vino, vinak)]
 struct General;
 
 struct Handler;
@@ -278,6 +291,19 @@ fn create_winner_embed(text: String, embed: &mut CreateEmbed) -> &mut CreateEmbe
     .footer(|f| f.text("🍷 mnam mnam 🍷"))
 }
 
+fn create_user_embed(user_info: UserInfo, embed: &mut CreateEmbed) -> &mut CreateEmbed {
+    embed.colour(0xa0517d)
+    .title(format!("víňák {}", user_info.username));
+
+    for lang in user_info.languages {
+        if lang.total_seconds > 0 {
+            embed.field(lang.name, lang.text, true);
+        }
+    }
+
+    embed
+}
+
 async fn vitez_helper() -> String {
     let mut con = get_redis_connection();
     con.get::<&str, String>(REDIS_WINNER_KEY).unwrap_or("Zatial neni 😴🍷".to_string())
@@ -309,6 +335,32 @@ async fn vino(ctx: &Context, msg: &Message) -> CommandResult {
     let text = vino_helper().await;
 
     msg.channel_id.send_message(&ctx.http, |m| m.embed(|e| create_leaderboard_embed(text, e))).await?;
+
+    Ok(())
+}
+
+#[command]
+async fn vinak(ctx: &Context, msg: &Message, mut args: Args) -> CommandResult {
+    if let Ok(username) = args.single::<String>() {
+        let api_url = format!("https://{}/api/compat/wakatime/v1/users/{}/stats/month", WAKAPI_DOMAIN.as_str(), username);
+
+        let response = reqwest::get(api_url).await.unwrap();
+
+        return match response.json::<UserPayload>().await {
+            Ok(payload) =>  {
+                msg.channel_id.send_message(&ctx.http, |m| m.add_embed(|e| create_user_embed(payload.data, e))).await?;
+                Ok(())
+            },
+            Err(_) => {
+                msg.channel_id.say(&ctx.http, "Invalid username").await?;
+                Ok(())
+            }
+        }
+
+
+    } else {
+        msg.channel_id.say(&ctx.http, "Missing username").await?;
+    }
 
     Ok(())
 }
