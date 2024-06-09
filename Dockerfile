@@ -1,6 +1,6 @@
 ARG project_name=wakapi-leaderboard
 
-FROM rust:latest AS builder
+FROM rust:bookworm AS builder
 
 WORKDIR /app
 
@@ -9,7 +9,7 @@ COPY . .
 RUN cargo clean
 RUN cargo build --release
 
-FROM debian:buster-slim as final
+FROM debian:bookworm-slim as final
 ARG project_name
 
 RUN apt-get update
