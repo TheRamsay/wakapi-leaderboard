@@ -34,22 +34,3 @@ lazy_static! {
         .parse()
         .expect("Port has to be an integer.");
 }
-
-static REDIS_CLIENT: Lazy<Arc<Mutex<RedisClient>>> = Lazy::new(|| {
-    Arc::new(Mutex::new(RedisClient::new(
-        (*REDIS_URL).to_owned(),
-        (*REDIS_PORT).to_owned(),
-        (*REDIS_USERNAME).to_owned(),
-        (*REDIS_PASSWORD).to_owned(),
-    )))
-});
-
-pub async fn get_redis_client() -> Result<MutexGuard<'static, RedisClient>> {
-    let mut client = REDIS_CLIENT.lock().await;
-
-    if !client.is_connected() {
-        client.connect()?;
-    }
-
-    Ok(client)
-}

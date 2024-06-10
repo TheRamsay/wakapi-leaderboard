@@ -1,77 +1,64 @@
+use std::sync::Arc;
+
 use anyhow::{Ok, Result};
-use redis::{Commands, Connection, FromRedisValue, ToRedisArgs};
+use poise::serenity_prelude::prelude::TypeMapKey;
+use redis::{
+    aio::MultiplexedConnection, AsyncCommands, Client, Commands, Connection, FromRedisValue,
+    ToRedisArgs,
+};
+use tokio::sync::RwLock;
+
+pub type SharedRedisClient = Arc<RwLock<RedisClient>>;
 
 pub struct RedisClient {
-    host: String,
-    port: u16,
-    username: String,
-    password: String,
-    connection: Option<Connection>,
+    client: Client,
+}
+impl TypeMapKey for RedisClient {
+    type Value = SharedRedisClient;
 }
 
 impl RedisClient {
-    pub fn new(host: String, port: u16, username: String, password: String) -> Self {
-        Self {
-            host,
-            port,
-            username,
-            password,
-            connection: None,
-        }
+    pub fn new(host: String, port: u16, username: String, password: String) -> Result<Self> {
+        Ok(Self {
+            client: Client::open(format!(
+                "redis://{}:{}@{}:{}/",
+                username, password, host, port
+            ))?,
+        })
     }
 
-    pub fn is_connected(&self) -> bool {
-        self.connection.is_some()
+    async fn get_connection(&self) -> Result<MultiplexedConnection> {
+        Ok(self.client.get_multiplexed_async_connection().await?)
     }
 
-    pub fn connect(&mut self) -> Result<()> {
-        let client = redis::Client::open(format!(
-            "redis://{}:{}@{}:{}/",
-            self.username, self.password, self.host, self.port
-        ))?;
+    pub async fn get<RV: FromRedisValue>(&mut self, key: &str) -> Result<Option<RV>> {
+        let mut connection = self.get_connection().await?;
+        Ok(connection.get(key).await?)
+    }
 
-        self.connection = Some(client.get_connection().unwrap());
+    pub async fn set<V: ToRedisArgs + Send + Sync>(&mut self, key: &str, value: V) -> Result<()> {
+        let mut connection = self.get_connection().await?;
+        connection.set(key, value).await?;
 
         Ok(())
     }
 
-    pub fn get<RV: FromRedisValue>(&mut self, key: &str) -> Result<Option<RV>> {
-        if let Some(ref mut connection) = self.connection {
-            let val = connection.get::<&str, Option<RV>>(key)?;
+    pub async fn set_ex<V: ToRedisArgs + Send + Sync>(
+        &mut self,
+        key: &str,
+        value: V,
+        expiration: usize,
+    ) -> Result<()> {
+        let mut connection = self.get_connection().await?;
+        connection.set_ex(key, value, expiration).await?;
 
-            Ok(val)
-        } else {
-            Err(anyhow::anyhow!("No connection to Redis"))
-        }
+        Ok(())
     }
 
-    pub fn set<V: ToRedisArgs>(&mut self, key: &str, value: V) -> Result<()> {
-        if let Some(ref mut connection) = self.connection {
-            connection.set::<&str, V, String>(key, value)?;
+    pub async fn del(&mut self, key: &str) -> Result<()> {
+        let mut connection = self.get_connection().await?;
+        connection.del(key).await?;
 
-            Ok(())
-        } else {
-            Err(anyhow::anyhow!("No connection to Redis"))
-        }
-    }
-
-    pub fn set_ex<V: ToRedisArgs>(&mut self, key: &str, value: V, expiration: usize) -> Result<()> {
-        if let Some(ref mut connection) = self.connection {
-            connection.set_ex::<&str, V, String>(key, value, expiration)?;
-
-            Ok(())
-        } else {
-            Err(anyhow::anyhow!("No connection to Redis"))
-        }
-    }
-
-    pub fn del(&mut self, key: &str) -> Result<()> {
-        if let Some(ref mut connection) = self.connection {
-            connection.del::<&str, ()>(key)?;
-
-            Ok(())
-        } else {
-            Err(anyhow::anyhow!("No connection to Redis"))
-        }
+        Ok(())
     }
 }

@@ -1,17 +1,19 @@
-use std::collections::HashSet;
+use std::{collections::HashSet, sync::Arc};
 
 use anyhow::Result;
 use chrono::{Datelike, Local, NaiveDate};
 use commands::{clear, vinak, vino, vitez};
 use config::{
-    get_redis_client, CHANNEL_ID, DISCORD_TOKEN, REDIS_PASSWORD, REDIS_PORT, REDIS_URL, REDIS_USERNAME, REDIS_WINNER_KEY
+    CHANNEL_ID, DISCORD_TOKEN, REDIS_PASSWORD, REDIS_PORT, REDIS_URL, REDIS_USERNAME,
+    REDIS_WINNER_KEY,
 };
 use dotenv::dotenv;
 use poise::serenity_prelude::{
     self as serenity, ChannelId, CreateEmbed, CreateEmbedFooter, CreateMessage, UserId,
 };
-use redis_client::RedisClient;
-use scraper::scrape_leaderboard;
+use redis_client::{RedisClient, SharedRedisClient};
+use scraper::WakapiScraper;
+use tokio::sync::{Mutex, RwLock};
 
 mod commands;
 mod config;
@@ -20,7 +22,10 @@ mod redis_client;
 mod scraper;
 mod utils;
 
-pub struct Data {} // User data, which is stored and accessible in all command invocations
+pub struct Data {
+    pub redis_client: SharedRedisClient,
+    pub wakapi_scraper: Arc<Mutex<WakapiScraper>>,
+} // User data, which is stored and accessible in all command invocations
 pub type Error = Box<dyn std::error::Error + Send + Sync>;
 pub type Context<'a> = poise::Context<'a, Data, Error>;
 
@@ -85,8 +90,34 @@ async fn main() {
                 Box::pin(async move {
                     println!("Logged in as {}", _ready.user.name);
                     poise::builtins::register_globally(ctx, &framework.options().commands).await?;
+                    let redis_client = Arc::new(RwLock::new(RedisClient::new(
+                        (*REDIS_URL).to_owned(),
+                        *REDIS_PORT,
+                        (*REDIS_USERNAME).to_owned(),
+                        (*REDIS_PASSWORD).to_owned(),
+                    )?));
+
+                    let wakapi_scraper =
+                        Arc::new(Mutex::new(WakapiScraper::new(redis_client.clone())));
+
+                    let data = Data {
+                        redis_client: redis_client.clone(),
+                        wakapi_scraper: wakapi_scraper.clone(),
+                    };
+
+                    ctx.data
+                        .write()
+                        .await
+                        .insert::<WakapiScraper>(wakapi_scraper.clone());
+
+                    ctx.data
+                        .write()
+                        .await
+                        .insert::<RedisClient>(redis_client.clone());
+
                     tokio::spawn(monthly_save(ctx.clone()));
-                    Ok(Data {})
+
+                    Ok(data)
                 })
             },
         )
@@ -130,26 +161,40 @@ async fn monthly_save(ctx: serenity::Context) -> Result<()> {
 
         tokio::time::sleep(duration_until_last_day_of_month).await;
 
-        let mut client = get_redis_client().await?;
+        let winner_text: String;
 
-        let winner = scrape_leaderboard(false)
+        let wakapi_client = ctx
+            .data
+            .write()
             .await
-            .unwrap()
-            .first()
+            .get::<WakapiScraper>()
             .unwrap()
             .clone();
 
-        let winner_text = format!(
-            "{} - {:.4}",
-            winner.username,
-            winner.total_seconds as f64 / (60 * 60) as f64
-        );
+        if let Some(winner) = wakapi_client
+            .lock()
+            .await
+            .scrape_leaderboard(false)
+            .await?
+            .first()
+        {
+            winner_text = format!(
+                "{} - {:.4}",
+                winner.username,
+                winner.total_seconds as f64 / (60 * 60) as f64
+            );
 
-        client.set::<String>(REDIS_WINNER_KEY, winner_text).unwrap();
-
-        let winner = client
-            .get::<String>(REDIS_WINNER_KEY)?
-            .unwrap_or("Zatial neni 😴🍷".to_string());
+            {
+                let redis_client = ctx.data.write().await.get::<RedisClient>().unwrap().clone();
+                redis_client
+                    .write()
+                    .await
+                    .set::<String>(REDIS_WINNER_KEY, winner_text.clone())
+                    .await?;
+            }
+        } else {
+            winner_text = "Zatial neni 😴🍷".to_string();
+        }
 
         ChannelId::new(*CHANNEL_ID)
             .send_message(
@@ -158,7 +203,7 @@ async fn monthly_save(ctx: serenity::Context) -> Result<()> {
                     CreateEmbed::new()
                         .color(0xeda42f)
                         .title("🥇 Vino vitez 🥇")
-                        .field("", winner, false)
+                        .field("", winner_text, false)
                         .footer(CreateEmbedFooter::new("🍷 mnam mnam 🍷")),
                 ),
             )

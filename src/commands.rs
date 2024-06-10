@@ -1,19 +1,27 @@
-use poise::serenity_prelude::{CreateEmbed, CreateEmbedFooter, User};
+use poise::{
+    serenity_prelude::{CreateEmbed, CreateEmbedFooter, User},
+    CreateReply,
+};
 
 use crate::{
     config::{
-        get_redis_client, REDIS_LAST_UPDATE_KEY, REDIS_LEADERBOARD_MEMBERS_KEY, REDIS_PASSWORD,
-        REDIS_PORT, REDIS_URL, REDIS_USERNAME, REDIS_WINNER_KEY, WAKAPI_DOMAIN,
+        REDIS_LAST_UPDATE_KEY, REDIS_LEADERBOARD_MEMBERS_KEY, REDIS_PASSWORD, REDIS_PORT,
+        REDIS_URL, REDIS_USERNAME, REDIS_WINNER_KEY, WAKAPI_DOMAIN,
     },
     models::UserPayload,
     redis_client::RedisClient,
-    scraper::{get_leaderboard_users, scrape_leaderboard},
     Context, Error,
 };
 
 #[poise::command(slash_command, prefix_command)]
 pub async fn vino(ctx: Context<'_>) -> Result<(), Error> {
-    let leaderboard = scrape_leaderboard(true).await?;
+    let leaderboard = ctx
+        .data()
+        .wakapi_scraper
+        .lock()
+        .await
+        .scrape_leaderboard(true)
+        .await?;
 
     let mut message = String::new();
 
@@ -44,21 +52,35 @@ pub async fn vino(ctx: Context<'_>) -> Result<(), Error> {
 
 #[poise::command(prefix_command, slash_command, owners_only)]
 pub async fn clear(ctx: Context<'_>) -> Result<(), Error> {
-    let mut client = get_redis_client().await?;
-
     let mut keys_to_delete = vec![];
-    let users = get_leaderboard_users(true).await?;
+    {
+        let wakapi_scraper = ctx.data().wakapi_scraper.clone();
+        let users = wakapi_scraper
+            .lock()
+            .await
+            .get_leaderboard_users(true)
+            .await?;
 
-    for username in users {
-        keys_to_delete.push(username);
+        for username in users {
+            keys_to_delete.push(username);
+        }
     }
 
     keys_to_delete.push(String::from(REDIS_LAST_UPDATE_KEY));
     keys_to_delete.push(String::from(REDIS_LEADERBOARD_MEMBERS_KEY));
 
+    let mut client = ctx.data().redis_client.write().await;
+
     for ref key in keys_to_delete {
-        client.del(key)?;
+        client.del(key).await?;
     }
+
+    ctx.send(
+        CreateReply::default()
+            .content("Vycisteno 🧹")
+            .ephemeral(true),
+    )
+    .await?;
 
     Ok(())
 }
@@ -114,10 +136,11 @@ pub async fn vinak(
 
 #[poise::command(prefix_command, slash_command)]
 pub async fn vitez(ctx: Context<'_>) -> Result<(), Error> {
-    let mut client = get_redis_client().await?;
+    let mut client = ctx.data().redis_client.write().await;
 
     let winner = client
-        .get::<String>(REDIS_WINNER_KEY)?
+        .get::<String>(REDIS_WINNER_KEY)
+        .await?
         .unwrap_or("Zatial neni 😴🍷".to_string());
 
     ctx.send(
