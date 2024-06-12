@@ -1,10 +1,6 @@
-use anyhow::Result;
 use lazy_static::lazy_static;
-use once_cell::sync::Lazy;
-use std::{env, sync::Arc};
-use tokio::sync::{Mutex, MutexGuard};
 
-use crate::redis_client::RedisClient;
+use std::env;
 
 pub const REDIS_LEADERBOARD_MEMBERS_KEY: &str = "members";
 pub const REDIS_WINNER_KEY: &str = "winner";
@@ -33,4 +29,6 @@ lazy_static! {
         .expect("Expected a token in the environment")
         .parse()
         .expect("Port has to be an integer.");
+    pub static ref TIMEZONE: String =
+        env::var("TIMEZONE").expect("Expected a timezone in the environment");
 }

@@ -1,7 +1,4 @@
-use poise::{
-    serenity_prelude::{CreateEmbed, CreateEmbedFooter, User},
-    CreateReply,
-};
+use poise::{serenity_prelude::{CreateEmbed, CreateEmbedFooter, User}, CreateReply};
 
 use crate::{
     config::{
@@ -15,6 +12,7 @@ use crate::{
 
 #[poise::command(slash_command, prefix_command)]
 pub async fn vino(ctx: Context<'_>) -> Result<(), Error> {
+
     let leaderboard = ctx
         .data()
         .wakapi_scraper
@@ -75,12 +73,7 @@ pub async fn clear(ctx: Context<'_>) -> Result<(), Error> {
         client.del(key).await?;
     }
 
-    ctx.send(
-        CreateReply::default()
-            .content("Vycisteno 🧹")
-            .ephemeral(true),
-    )
-    .await?;
+    ctx.send(CreateReply::default().content("Vycisteno 🧹").ephemeral(true)).await?;
 
     Ok(())
 }

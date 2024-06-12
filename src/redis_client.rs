@@ -3,7 +3,7 @@ use std::sync::Arc;
 use anyhow::{Ok, Result};
 use poise::serenity_prelude::prelude::TypeMapKey;
 use redis::{
-    aio::MultiplexedConnection, AsyncCommands, Client, Commands, Connection, FromRedisValue,
+    aio::MultiplexedConnection, AsyncCommands, Client, Commands, FromRedisValue,
     ToRedisArgs,
 };
 use tokio::sync::RwLock;

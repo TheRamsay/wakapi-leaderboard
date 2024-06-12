@@ -1,11 +1,12 @@
-use std::{collections::HashSet, sync::Arc};
+use std::{collections::HashSet, str::FromStr, sync::Arc};
 
 use anyhow::Result;
-use chrono::{Datelike, Local, NaiveDate};
+use chrono::{DateTime, Datelike, Local, NaiveDate, TimeZone, Utc};
+use chrono_tz::Tz;
 use commands::{clear, vinak, vino, vitez};
 use config::{
     CHANNEL_ID, DISCORD_TOKEN, REDIS_PASSWORD, REDIS_PORT, REDIS_URL, REDIS_USERNAME,
-    REDIS_WINNER_KEY,
+    REDIS_WINNER_KEY, TIMEZONE,
 };
 use dotenv::dotenv;
 use poise::serenity_prelude::{
@@ -145,7 +146,8 @@ async fn main() {
 
 async fn monthly_save(ctx: serenity::Context) -> Result<()> {
     loop {
-        let now = Local::now();
+        let timezone = Tz::from_str((*TIMEZONE).as_str())?;
+        let now = Utc::now().with_timezone(&timezone);
 
         let last_day_of_month = NaiveDate::from_ymd_opt(now.year(), now.month(), 1)
             .unwrap()
